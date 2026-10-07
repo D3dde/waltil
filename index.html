@@ -91,56 +91,39 @@
       <div class="row">
         <button id="btn-add-stop" class="btn btn-small">+ Add color</button>
       </div>
-      <p class="hint">Threshold uses only the first and last color. Posterize interpolates through all stops — drag to reorder.</p>
+      <p class="hint">Posterize interpolates through all stops — drag to reorder.</p>
     </details>
 
     <details class="group" open>
       <summary class="group-head">
-        <h2>Posterize / threshold</h2>
+        <h2>Posterize</h2>
         <button type="button" class="linkbtn" data-reset="quantize" onclick="event.preventDefault(); event.stopPropagation(); this.closest('details').dispatchEvent(new CustomEvent('reset-group',{bubbles:true,detail:'quantize'}));">Reset</button>
       </summary>
-      <div class="seg" role="radiogroup" aria-label="Quantize mode">
-        <label><input type="radio" name="mode" value="threshold" checked><span>Threshold</span></label>
-        <label><input type="radio" name="mode" value="posterize"><span>Posterize</span></label>
-      </div>
-      <p class="hint">Threshold splits at a single cut point. Posterize divides into even bands.</p>
+      <p class="hint">Divides tonal range into even bands.</p>
 
-      <div id="threshold-wrap">
-        <div class="field">
-          <div class="field-head">
-            <label for="threshold">Threshold</label>
-            <span class="num"><input type="number" id="threshold-num" min="0" max="100" step="1" inputmode="decimal" aria-label="Threshold, percent"><i>%</i></span>
-          </div>
-          <input type="range" id="threshold" min="0" max="100" step="1" value="50" aria-label="Threshold">
-          <p class="hint">Cut point where dark becomes light.</p>
+      <div class="field">
+        <div class="field-head">
+          <label for="levels">Bands</label>
+          <span class="num"><input type="number" id="levels-num" min="2" max="16" step="1" inputmode="numeric" aria-label="Bands"></span>
         </div>
+        <input type="range" id="levels" min="2" max="16" step="1" value="4" aria-label="Bands">
+        <p class="hint">Number of tonal bands (2–16).</p>
       </div>
-
-      <div id="posterize-wrap" hidden>
-        <div class="field">
-          <div class="field-head">
-            <label for="levels">Bands</label>
-            <span class="num"><input type="number" id="levels-num" min="2" max="16" step="1" inputmode="numeric" aria-label="Bands"></span>
-          </div>
-          <input type="range" id="levels" min="2" max="16" step="1" value="4" aria-label="Bands">
-          <p class="hint">Number of tonal bands (2–16).</p>
+      <div class="field">
+        <div class="field-head">
+          <label for="black">Black point</label>
+          <span class="num"><input type="number" id="black-num" min="0" max="100" step="1" inputmode="decimal" aria-label="Black point, percent"><i>%</i></span>
         </div>
-        <div class="field">
-          <div class="field-head">
-            <label for="black">Black point</label>
-            <span class="num"><input type="number" id="black-num" min="0" max="100" step="1" inputmode="decimal" aria-label="Black point, percent"><i>%</i></span>
-          </div>
-          <input type="range" id="black" min="0" max="100" step="1" value="0" aria-label="Black point">
-          <p class="hint">Shadows darker than this clamp to the first color.</p>
+        <input type="range" id="black" min="0" max="100" step="1" value="0" aria-label="Black point">
+        <p class="hint">Shadows darker than this clamp to the first color.</p>
+      </div>
+      <div class="field">
+        <div class="field-head">
+          <label for="white">White point</label>
+          <span class="num"><input type="number" id="white-num" min="0" max="100" step="1" inputmode="decimal" aria-label="White point, percent"><i>%</i></span>
         </div>
-        <div class="field">
-          <div class="field-head">
-            <label for="white">White point</label>
-            <span class="num"><input type="number" id="white-num" min="0" max="100" step="1" inputmode="decimal" aria-label="White point, percent"><i>%</i></span>
-          </div>
-          <input type="range" id="white" min="0" max="100" step="1" value="100" aria-label="White point">
-          <p class="hint">Highlights lighter than this clamp to the last color.</p>
-        </div>
+        <input type="range" id="white" min="0" max="100" step="1" value="100" aria-label="White point">
+        <p class="hint">Highlights lighter than this clamp to the last color.</p>
       </div>
 
       <label class="check">

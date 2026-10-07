@@ -1,14 +1,15 @@
 /* waltil — client-side limited-color wallpaper maker.
-   Pipeline: gray (rec.709) -> [posterize only: black/white] -> invert
-           -> quantize (threshold | posterize) -> palette ramp (stops).
+   Pipeline: gray (rec.709) -> [posterize: black/white] -> invert
+           -> quantize (posterize) -> palette ramp (stops).
    Everything runs in this tab; no network calls. */
 'use strict';
 
 const $ = (sel) => document.querySelector(sel);
 
 /* ---------------------------------------------------------------- palettes
-   Every preset is a 2-stop ramp (dark, light): that is all threshold mode can
-   use, and posterize interpolates smoothly between exactly two ends. */
+   Every preset is a 2-stop ramp (dark, light): posterize interpolates
+   smoothly between exactly two ends. With more stops, posterize steps
+   through every stop. */
 
 const PRESETS = {
   mono:      ['#000000', '#FFFFFF'],
@@ -38,8 +39,6 @@ const DEFAULTS = {
   black: 0,
   white: 100,
   invert: false,
-  mode: 'threshold',
-  threshold: 50,
   levels: 4,
   dither: 'none',
   stops: PRESETS.mono.slice(),
@@ -49,10 +48,9 @@ const DEFAULTS = {
 
 /* numeric ranges used both for clamping UI input and for sanitizing saved state */
 const NUMS = {
-  black:     { min: 0,   max: 100, digits: 0 },
-  white:     { min: 0,   max: 100, digits: 0 },
-  threshold: { min: 0,   max: 100, digits: 0 },
-  levels:    { min: 2,   max: 16,  digits: 0 },
+  black:  { min: 0,   max: 100, digits: 0 },
+  white:  { min: 0,   max: 100, digits: 0 },
+  levels: { min: 2,   max: 16,  digits: 0 },
 };
 
 const DITHERS = ['none', 'fs', 'atkinson', 'bayer4', 'noise'];
@@ -227,7 +225,6 @@ function sanitizeParams(raw) {
     if (Number.isFinite(v)) p[key] = clampNum(v, key);
   }
   p.invert = raw.invert === true;
-  p.mode = oneOf(raw.mode, ['threshold', 'posterize'], DEFAULTS.mode);
   p.dither = oneOf(raw.dither === 'bayer' ? 'bayer4' : raw.dither, DITHERS, DEFAULTS.dither);
 
   const q = Number(raw.previewQuality);
@@ -415,10 +412,9 @@ function processPixels(data, w, h, p, scratch) {
     buf[i] = grayOf(data[j], data[j + 1], data[j + 2]);
   }
 
-  /* Levels (posterize only) */
-  const useLevels = p.mode === 'posterize';
-  const bp = useLevels ? p.black / 100 : 0;
-  const wp = useLevels ? Math.max(p.white / 100, bp + 1e-6) : 1;
+  /* Levels (always applied for posterize) */
+  const bp = p.black / 100;
+  const wp = Math.max(p.white / 100, bp + 1e-6);
   const span = wp - bp;
   const invert = p.invert;
 
@@ -429,23 +425,16 @@ function processPixels(data, w, h, p, scratch) {
     buf[i] = invert ? 1 - v : v;
   }
 
-  /* Quantize */
-  let quantize, spread;
-  if (p.mode === 'threshold') {
-    const t = (p.threshold / 100) * (65536 / 65535);
-    quantize = (v) => (v >= t ? 1 : 0);
-    spread = 1;
-  } else {
-    const L = Math.max(2, p.levels | 0);
-    const step = 1 / (L - 1);
-    const invStep = L - 1;
-    quantize = (v) => {
-      if (v <= 0) return 0;
-      if (v >= 1) return 1;
-      return Math.round(v * invStep) * step;
-    };
-    spread = step;
-  }
+  /* Quantize (posterize) */
+  const L = Math.max(2, p.levels | 0);
+  const step = 1 / (L - 1);
+  const invStep = L - 1;
+  const quantize = (v) => {
+    if (v <= 0) return 0;
+    if (v >= 1) return 1;
+    return Math.round(v * invStep) * step;
+  };
+  const spread = step;
 
   const dither = p.dither;
   if (dither === 'none') {
@@ -971,11 +960,6 @@ function renderStops() {
   $('#btn-add-stop').disabled = state.params.stops.length >= 8;
 }
 
-function updateModeWrap() {
-  $('#threshold-wrap').hidden = state.params.mode !== 'threshold';
-  $('#posterize-wrap').hidden = state.params.mode !== 'posterize';
-}
-
 function setPairValue(id, value) {
   $('#' + id).value = value;
   $('#' + id + '-num').value = fmtNum(id, value);
@@ -985,14 +969,11 @@ function syncControls() {
   const p = state.params;
   setPairValue('black', p.black);
   setPairValue('white', p.white);
-  setPairValue('threshold', p.threshold);
   setPairValue('levels', p.levels);
   $('#invert').checked = p.invert;
   $('#dither').value = p.dither;
   updateQualityOptions();
   $('#preset').value = p.preset;
-  document.querySelector(`input[name="mode"][value="${p.mode}"]`).checked = true;
-  updateModeWrap();
   renderStops();
 }
 
@@ -1042,8 +1023,6 @@ const SECTION_RESETS = {
   source: (p) => { p.previewQuality = DEFAULTS.previewQuality; },
   colors: (p) => { p.stops = PRESETS.mono.slice(); p.preset = 'mono'; },
   quantize: (p) => {
-    p.mode = 'threshold';
-    p.threshold = 50;
     p.levels = 4;
     p.black = 0;
     p.white = 100;
@@ -1119,7 +1098,6 @@ function bindUI() {
 
   bindPair('black', 'black');
   bindPair('white', 'white');
-  bindPair('threshold', 'threshold');
   bindPair('levels', 'levels');
 
   $('#dither').addEventListener('change', (e) => { state.params.dither = e.target.value; touch(); });
@@ -1131,12 +1109,6 @@ function bindUI() {
     state.params.previewQuality = v;
     if (state.source) updatePreviewSize();
     touch();
-  });
-
-  document.querySelectorAll('input[name="mode"]').forEach((el) => {
-    el.addEventListener('change', () => {
-      if (el.checked) { state.params.mode = el.value; updateModeWrap(); touch(); }
-    });
   });
 
   $('#preset').addEventListener('change', (e) => {
