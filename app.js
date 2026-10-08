@@ -1,14 +1,14 @@
 /* waltil — client-side limited-color wallpaper maker.
-   Pipeline: gray (rec.709) -> [posterize: black/white] -> invert
-           -> quantize (posterize) -> palette ramp (stops).
+   Pipeline: gray (rec.709) -> [quantize: black/white] -> invert
+           -> quantize -> palette ramp (stops).
    Everything runs in this tab; no network calls. */
 'use strict';
 
 const $ = (sel) => document.querySelector(sel);
 
 /* ---------------------------------------------------------------- palettes
-   Every preset is a 2-stop ramp (dark, light): posterize interpolates
-   smoothly between exactly two ends. With more stops, posterize steps
+   Every preset is a 2-stop ramp (dark, light): quantize interpolates
+   smoothly between exactly two ends. With more stops, quantize steps
    through every stop. */
 
 const PRESETS = {
@@ -41,6 +41,7 @@ const DEFAULTS = {
   invert: false,
   levels: 4,
   dither: 'none',
+  ditherStrength: 100,
   stops: PRESETS.mono.slice(),
   preset: 'mono',
   previewQuality: 1080,
@@ -48,9 +49,10 @@ const DEFAULTS = {
 
 /* numeric ranges used both for clamping UI input and for sanitizing saved state */
 const NUMS = {
-  black:  { min: 0,   max: 100, digits: 0 },
-  white:  { min: 0,   max: 100, digits: 0 },
-  levels: { min: 2,   max: 16,  digits: 0 },
+  black:          { min: 0,   max: 100, digits: 0 },
+  white:          { min: 0,   max: 100, digits: 0 },
+  levels:         { min: 2,   max: 16,  digits: 0 },
+  ditherStrength: { min: 0,   max: 100, digits: 0 },
 };
 
 const DITHERS = ['none', 'fs', 'atkinson', 'bayer4', 'noise'];
@@ -152,22 +154,18 @@ function toast(msg, isError = false) {
 function setStatus(msg) { $('#status').textContent = msg; }
 
 /* ------------------------------------------------------------- accent color
-   Buttons, sliders and focus rings follow the lightest color of the palette,
+   Buttons, sliders and focus rings follow the second color of the palette,
    so a loaded wallpaper colors the chrome around it. */
 
 function applyAccent() {
-  let best = null;
-  let bestL = -1;
-  for (const hex of state.params.stops) {
-    const rgb = parseHex(hex);
-    if (!rgb) continue;
-    const L = relLum(rgb[0], rgb[1], rgb[2]);
-    if (L > bestL) { bestL = L; best = rgb; }
-  }
-  if (!best) return;
+  const stops = state.params.stops;
+  if (stops.length < 2) return;
+  const hex = stops[1];
+  const rgb = parseHex(hex);
+  if (!rgb) return;
 
-  let [r, g, b] = best;
-  let L = bestL;
+  let [r, g, b] = rgb;
+  let L = relLum(r, g, b);
   /* keep it readable on the dark background */
   for (let k = 0; L < 0.16 && k < 5; k++) {
     r += (255 - r) * 0.3;
@@ -261,6 +259,17 @@ function touch() { applyAccent(); scheduleRender(); saveSettings(); }
 function markCustom() {
   state.params.preset = '';
   $('#preset').value = '';
+  updateCustomSelectUI();
+}
+
+function updateCustomSelectUI() {
+  const triggerSwatches = $('#preset-trigger-swatches');
+  const triggerText = $('#preset-trigger-text');
+  const options = $('#preset-options').querySelectorAll('.custom-select-option');
+  
+  triggerText.textContent = 'Custom';
+  triggerSwatches.innerHTML = '';
+  options.forEach(o => o.setAttribute('aria-selected', 'false'));
 }
 
 /* ---------------------------------------------------------------- source
@@ -412,7 +421,7 @@ function processPixels(data, w, h, p, scratch) {
     buf[i] = grayOf(data[j], data[j + 1], data[j + 2]);
   }
 
-  /* Levels (always applied for posterize) */
+  /* Levels (always applied for quantize) */
   const bp = p.black / 100;
   const wp = Math.max(p.white / 100, bp + 1e-6);
   const span = wp - bp;
@@ -425,7 +434,7 @@ function processPixels(data, w, h, p, scratch) {
     buf[i] = invert ? 1 - v : v;
   }
 
-  /* Quantize (posterize) */
+  /* Quantize */
   const L = Math.max(2, p.levels | 0);
   const step = 1 / (L - 1);
   const invStep = L - 1;
@@ -437,14 +446,15 @@ function processPixels(data, w, h, p, scratch) {
   const spread = step;
 
   const dither = p.dither;
+  const ditherStrength = p.ditherStrength / 100;
   if (dither === 'none') {
     for (let i = 0; i < n; i++) buf[i] = quantize(buf[i]);
   } else if (DIFFUSION[dither]) {
-    ditherDiffuse(buf, w, h, quantize, DIFFUSION[dither]);
+    ditherDiffuse(buf, w, h, quantize, DIFFUSION[dither], ditherStrength);
   } else if (dither === 'noise') {
-    ditherNoise(buf, n, spread, quantize);
+    ditherNoise(buf, n, spread, quantize, ditherStrength);
   } else if (dither === 'bayer4') {
-    ditherOrdered(buf, w, h, spread, quantize);
+    ditherOrdered(buf, w, h, spread, quantize, ditherStrength);
   }
 
   /* Map to color stops */
@@ -472,7 +482,7 @@ function processPixels(data, w, h, p, scratch) {
   }
 }
 
-function ditherDiffuse(buf, w, h, quantize, kernel) {
+function ditherDiffuse(buf, w, h, quantize, kernel, strength) {
   const { div, taps } = kernel;
   const nt = taps.length;
   const divInv = 1 / div;
@@ -483,7 +493,7 @@ function ditherDiffuse(buf, w, h, quantize, kernel) {
       const old = buf[i];
       const nv = quantize(old);
       buf[i] = nv;
-      const err = (old - nv) * divInv;
+      const err = (old - nv) * divInv * strength;
       if (err === 0) continue;
       for (let t = 0; t < nt; t++) {
         const nx = x + taps[t][0];
@@ -494,7 +504,7 @@ function ditherDiffuse(buf, w, h, quantize, kernel) {
   }
 }
 
-function ditherOrdered(buf, w, h, spread, quantize) {
+function ditherOrdered(buf, w, h, spread, quantize, strength) {
   const size = 4;
   const cells = 16;
   for (let y = 0; y < h; y++) {
@@ -503,17 +513,17 @@ function ditherOrdered(buf, w, h, spread, quantize) {
     for (let x = 0; x < w; x++) {
       const i = rowBase + x;
       const xMod = x & 3;
-      const offset = BAYER4_OFFSETS[yMod * size + xMod] * spread;
+      const offset = BAYER4_OFFSETS[yMod * size + xMod] * spread * strength;
       const v = buf[i] + offset;
       buf[i] = quantize(v < 0 ? 0 : v > 1 ? 1 : v);
     }
   }
 }
 
-function ditherNoise(buf, n, spread, quantize) {
+function ditherNoise(buf, n, spread, quantize, strength) {
   const halfSpread = spread * 0.5;
   for (let i = 0; i < n; i++) {
-    const v = buf[i] + (Math.random() - 0.5) * spread;
+    const v = buf[i] + (Math.random() - 0.5) * spread * strength;
     buf[i] = quantize(v < 0 ? 0 : v > 1 ? 1 : v);
   }
 }
@@ -970,10 +980,36 @@ function syncControls() {
   setPairValue('black', p.black);
   setPairValue('white', p.white);
   setPairValue('levels', p.levels);
+  setPairValue('ditherStrength', p.ditherStrength);
   $('#invert').checked = p.invert;
   $('#dither').value = p.dither;
+  updateDitherStrengthState();
   updateQualityOptions();
-  $('#preset').value = p.preset;
+  // Update custom select
+  const presetVal = p.preset;
+  $('#preset').value = presetVal;
+  const triggerSwatches = $('#preset-trigger-swatches');
+  const triggerText = $('#preset-trigger-text');
+  const options = $('#preset-options').querySelectorAll('.custom-select-option');
+  // Clear all first
+  options.forEach(o => o.setAttribute('aria-selected', 'false'));
+  // Set correct one
+  options.forEach(o => {
+    const selected = o.dataset.value === presetVal;
+    if (selected) {
+      o.setAttribute('aria-selected', 'true');
+      triggerText.textContent = o.textContent.trim();
+      triggerSwatches.innerHTML = '';
+      const colors = presetVal && o.dataset.colors
+        ? o.dataset.colors.split(',')
+        : p.stops;
+      colors.forEach(c => {
+        const s = document.createElement('span');
+        s.style.background = c.trim();
+        triggerSwatches.appendChild(s);
+      });
+    }
+  });
   renderStops();
 }
 
@@ -1028,6 +1064,7 @@ const SECTION_RESETS = {
     p.white = 100;
     p.invert = false;
     p.dither = 'none';
+    p.ditherStrength = 100;
   },
 };
 
@@ -1099,8 +1136,21 @@ function bindUI() {
   bindPair('black', 'black');
   bindPair('white', 'white');
   bindPair('levels', 'levels');
+  bindPair('dither-strength', 'ditherStrength');
 
-  $('#dither').addEventListener('change', (e) => { state.params.dither = e.target.value; touch(); });
+  function updateDitherStrengthState() {
+    const hidden = $('#dither').value === 'none';
+    const field = $('#dither-strength').closest('.field');
+    if (field) field.hidden = hidden;
+    $('#dither-strength').disabled = hidden;
+    $('#dither-strength-num').disabled = hidden;
+  }
+  $('#dither').addEventListener('change', (e) => {
+    state.params.dither = e.target.value;
+    updateDitherStrengthState();
+    touch();
+  });
+  updateDitherStrengthState();
   $('#invert').addEventListener('change', (e) => { state.params.invert = e.target.checked; touch(); });
 
   $('#preview-quality').addEventListener('change', (e) => {
@@ -1120,13 +1170,197 @@ function bindUI() {
     touch();
   });
 
+  // Custom select dropdown for palettes
+  (() => {
+    const wrap = $('#preset-wrap');
+    const trigger = $('#preset-trigger');
+    const optionsList = $('#preset-options');
+    const hiddenInput = $('#preset');
+    const triggerSwatches = $('#preset-trigger-swatches');
+    const triggerText = $('#preset-trigger-text');
+    const options = optionsList.querySelectorAll('.custom-select-option');
+    let open = false;
+
+    function close() {
+      optionsList.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      open = false;
+    }
+
+    function openDropdown() {
+      optionsList.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      open = true;
+    }
+
+    function selectOption(option) {
+      const value = option.dataset.value;
+      const colors = option.dataset.colors;
+      const text = option.textContent.trim();
+
+      hiddenInput.value = value;
+      state.params.preset = value;
+      if (colors) {
+        state.params.stops = colors.split(',').map(c => c.trim().toUpperCase());
+      } else {
+        state.params.preset = '';
+      }
+
+      // Update trigger
+      triggerText.textContent = text;
+      triggerSwatches.innerHTML = '';
+      if (colors) {
+        colors.split(',').forEach(c => {
+          const s = document.createElement('span');
+          s.style.background = c.trim();
+          triggerSwatches.appendChild(s);
+        });
+      }
+
+      // Update aria-selected
+      options.forEach(o => o.setAttribute('aria-selected', 'false'));
+      option.setAttribute('aria-selected', 'true');
+
+      renderStops();
+      touch();
+      close();
+    }
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      open ? close() : openDropdown();
+    });
+
+    optionsList.addEventListener('click', (e) => {
+      const option = e.target.closest('.custom-select-option');
+      if (option) selectOption(option);
+    });
+
+    optionsList.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { close(); trigger.focus(); }
+      else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const selected = optionsList.querySelector('[aria-selected="true"]');
+        const idx = Array.from(options).indexOf(selected);
+        const next = options[(idx + 1) % options.length];
+        next.focus();
+        next.setAttribute('aria-selected', 'true');
+        if (selected) selected.setAttribute('aria-selected', 'false');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const selected = optionsList.querySelector('[aria-selected="true"]');
+        const idx = Array.from(options).indexOf(selected);
+        const prev = options[(idx - 1 + options.length) % options.length];
+        prev.focus();
+        prev.setAttribute('aria-selected', 'true');
+        if (selected) selected.setAttribute('aria-selected', 'false');
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const focused = optionsList.querySelector(':focus');
+        if (focused) selectOption(focused);
+      }
+    });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      if (open && !wrap.contains(e.target)) close();
+    });
+
+    // Initialize trigger swatches from loaded settings (state.params already loaded)
+    const presetVal = state.params.preset;
+    let initialOpt = null;
+    if (presetVal) {
+      initialOpt = optionsList.querySelector(`[data-value="${presetVal}"]`);
+    } else {
+      // Custom preset has data-value="" in HTML
+      initialOpt = optionsList.querySelector('[data-value=""]');
+    }
+    if (!initialOpt) {
+      // Fallback - Custom preset
+      triggerText.textContent = 'Custom';
+      triggerSwatches.innerHTML = '';
+      state.params.stops.forEach(c => {
+        const s = document.createElement('span');
+        s.style.background = c.trim();
+        triggerSwatches.appendChild(s);
+      });
+      options.forEach(o => o.setAttribute('aria-selected', 'false'));
+    } else if (initialOpt.dataset.colors) {
+      initialOpt.dataset.colors.split(',').forEach(c => {
+        const s = document.createElement('span');
+        s.style.background = c.trim();
+        triggerSwatches.appendChild(s);
+      });
+      triggerText.textContent = initialOpt.textContent.trim();
+      initialOpt.setAttribute('aria-selected', 'true');
+    } else {
+      // Custom preset selected
+      triggerText.textContent = 'Custom';
+      triggerSwatches.innerHTML = '';
+      state.params.stops.forEach(c => {
+        const s = document.createElement('span');
+        s.style.background = c.trim();
+        triggerSwatches.appendChild(s);
+      });
+      initialOpt.setAttribute('aria-selected', 'true');
+    }
+    renderStops();
+  })();
+
   $('#btn-add-stop').addEventListener('click', () => {
     if (state.params.stops.length >= 8) return;
     const last = parseHex(state.params.stops[state.params.stops.length - 1]) || [128, 128, 128];
-    state.params.stops.push(toHex(last.map((c) => 255 - c)));
+    state.params.stops.push(toHex(last));
     markCustom();
     renderStops();
     touch();
+  });
+
+  $('#btn-save-palette').addEventListener('click', () => {
+    const data = JSON.stringify({ stops: state.params.stops }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'palette.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('Palette saved');
+  });
+
+  $('#btn-load-palette').addEventListener('click', () => {
+    $('#palette-file-input').click();
+  });
+
+  $('#palette-file-input').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (data.stops && Array.isArray(data.stops) && data.stops.length >= 2) {
+          const stops = data.stops.slice(0, 8).map(parseHex).filter(Boolean).map(toHex);
+          if (stops.length >= 2) {
+            state.params.stops = stops;
+            state.params.preset = '';
+            renderStops();
+            touch();
+            toast('Palette loaded');
+          } else {
+            toast('Invalid palette: need at least 2 valid colors', true);
+          }
+        } else {
+          toast('Invalid palette format', true);
+        }
+      } catch {
+        toast('Failed to parse JSON', true);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   });
 
   /* compare: hold */

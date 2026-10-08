@@ -63,43 +63,56 @@
         <h2>Colors</h2>
         <button type="button" class="linkbtn" data-reset="colors" onclick="event.preventDefault(); event.stopPropagation(); this.closest('details').dispatchEvent(new CustomEvent('reset-group',{bubbles:true,detail:'colors'}));">Reset</button>
       </summary>
-      <div class="field">
+<div class="field">
         <div class="field-head"><label for="preset">Palette</label></div>
-        <select id="preset">
-          <option value="">Custom</option>
-          <option value="mono" selected>Monochrome (default)</option>
-          <option value="rust">Rust &amp; cream</option>
-          <option value="cyanotype">Cyanotype</option>
-          <option value="sepia">Sepia</option>
-          <option value="ink">Ink on paper</option>
-          <option value="terminal">Terminal green</option>
-          <option value="ember">Ember</option>
-          <option value="nord">Nord</option>
-          <option value="gruvbox">Gruvbox</option>
-          <option value="dracula">Dracula</option>
-          <option value="solarized">Solarized</option>
-          <option value="ocean">Ocean</option>
-          <option value="sunset">Sunset</option>
-          <option value="forest">Forest</option>
-          <option value="neon">Neon</option>
-          <option value="blueprint">Blueprint</option>
-        </select>
+        <div class="custom-select" id="preset-wrap">
+          <button type="button" class="custom-select-trigger" id="preset-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Select palette">
+            <span class="custom-select-swatches" id="preset-trigger-swatches"></span>
+            <span class="custom-select-text" id="preset-trigger-text">Monochrome (default)</span>
+            <svg class="custom-select-arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          </button>
+          <ul class="custom-select-options" id="preset-options" role="listbox" aria-label="Palettes" hidden>
+            <li role="option" data-value="" class="custom-select-option" aria-selected="false">Custom</li>
+            <li role="option" data-value="mono" data-colors="#000000,#FFFFFF" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#000000"></span><span style="background:#FFFFFF"></span></span>Monochrome (default)</li>
+            <li role="option" data-value="rust" data-colors="#4A0E17,#FDE8D0" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#4A0E17"></span><span style="background:#FDE8D0"></span></span>Rust & cream</li>
+            <li role="option" data-value="cyanotype" data-colors="#0B1D3A,#DCE9FF" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#0B1D3A"></span><span style="background:#DCE9FF"></span></span>Cyanotype</li>
+            <li role="option" data-value="sepia" data-colors="#29170B,#F7E3C1" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#29170B"></span><span style="background:#F7E3C1"></span></span>Sepia</li>
+            <li role="option" data-value="ink" data-colors="#111111,#F4F1EA" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#111111"></span><span style="background:#F4F1EA"></span></span>Ink on paper</li>
+            <li role="option" data-value="terminal" data-colors="#06120A,#4DFF88" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#06120A"></span><span style="background:#4DFF88"></span></span>Terminal green</li>
+            <li role="option" data-value="ember" data-colors="#1A0600,#FF9B3D" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#1A0600"></span><span style="background:#FF9B3D"></span></span>Ember</li>
+            <li role="option" data-value="nord" data-colors="#2E3440,#ECEFF4" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#2E3440"></span><span style="background:#ECEFF4"></span></span>Nord</li>
+            <li role="option" data-value="gruvbox" data-colors="#282828,#FBF1C7" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#282828"></span><span style="background:#FBF1C7"></span></span>Gruvbox</li>
+            <li role="option" data-value="dracula" data-colors="#21222C,#F8F8F2" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#21222C"></span><span style="background:#F8F8F2"></span></span>Dracula</li>
+            <li role="option" data-value="solarized" data-colors="#002B36,#FDF6E3" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#002B36"></span><span style="background:#FDF6E3"></span></span>Solarized</li>
+            <li role="option" data-value="ocean" data-colors="#041527,#E1F5FE" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#041527"></span><span style="background:#E1F5FE"></span></span>Ocean</li>
+            <li role="option" data-value="sunset" data-colors="#2B1055,#FFE29F" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#2B1055"></span><span style="background:#FFE29F"></span></span>Sunset</li>
+            <li role="option" data-value="forest" data-colors="#0B2818,#E8F5E9" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#0B2818"></span><span style="background:#E8F5E9"></span></span>Forest</li>
+            <li role="option" data-value="neon" data-colors="#0F001A,#00F0FF" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#0F001A"></span><span style="background:#00F0FF"></span></span>Neon</li>
+            <li role="option" data-value="blueprint" data-colors="#0A1F44,#F0F6FF" class="custom-select-option" aria-selected="false"><span class="option-swatches"><span style="background:#0A1F44"></span><span style="background:#F0F6FF"></span></span>Blueprint</li>
+          </ul>
+          <input type="hidden" id="preset" value="">
+        </div>
       </div>
+      <div class="row">
+        <button id="btn-save-palette" class="btn btn-small" title="Save current palette as JSON">Save palette…</button>
+        <button id="btn-load-palette" class="btn btn-small" title="Load a palette from JSON file">Load palette…</button>
+      </div>
+      <input type="file" id="palette-file-input" accept=".json" hidden>
 
       <div class="stops" id="stops"></div>
 
       <div class="row">
         <button id="btn-add-stop" class="btn btn-small">+ Add color</button>
       </div>
-      <p class="hint">Posterize interpolates through all stops — drag to reorder.</p>
+      <p class="hint">Quantize interpolates through all stops — drag to reorder.</p>
     </details>
 
     <details class="group" open>
       <summary class="group-head">
-        <h2>Posterize</h2>
+        <h2>Quantize</h2>
         <button type="button" class="linkbtn" data-reset="quantize" onclick="event.preventDefault(); event.stopPropagation(); this.closest('details').dispatchEvent(new CustomEvent('reset-group',{bubbles:true,detail:'quantize'}));">Reset</button>
       </summary>
-      <p class="hint">Divides tonal range into even bands.</p>
+      <p class="hint">Reduces tonal range to a limited number of bands.</p>
 
       <div class="field">
         <div class="field-head">
@@ -107,7 +120,7 @@
           <span class="num"><input type="number" id="levels-num" min="2" max="16" step="1" inputmode="numeric" aria-label="Bands"></span>
         </div>
         <input type="range" id="levels" min="2" max="16" step="1" value="4" aria-label="Bands">
-        <p class="hint">Number of tonal bands (2–16).</p>
+        <p class="hint">Number of color bands (2 = duotone, 16 = smooth gradient).</p>
       </div>
       <div class="field">
         <div class="field-head">
@@ -142,6 +155,14 @@
           <option value="noise">Random noise</option>
         </select>
         <p class="hint">Simulates intermediate tones with patterns. None keeps crisp edges.</p>
+      </div>
+      <div class="field">
+        <div class="field-head">
+          <label for="dither-strength">Dither strength</label>
+          <span class="num"><input type="number" id="dither-strength-num" min="0" max="100" step="1" inputmode="numeric" aria-label="Dither strength, percent"><i>%</i></span>
+        </div>
+        <input type="range" id="dither-strength" min="0" max="100" step="1" value="100" aria-label="Dither strength">
+        <p class="hint">Controls intensity of dithering. 0% = no dithering, 100% = full effect.</p>
       </div>
     </details>
 
