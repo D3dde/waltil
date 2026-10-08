@@ -53,6 +53,7 @@ const NUMS = {
   white:          { min: 0,   max: 100, digits: 0 },
   levels:         { min: 2,   max: 16,  digits: 0 },
   ditherStrength: { min: 0,   max: 100, digits: 0 },
+  'dither-strength': { min: 0,   max: 100, digits: 0 },
 };
 
 const DITHERS = ['none', 'fs', 'atkinson', 'bayer4', 'noise'];
@@ -66,7 +67,6 @@ const BAYER4 = [
   0, 8, 2, 10, 12, 4, 14, 6,
   3, 11, 1, 9, 15, 7, 13, 5,
 ];
-const BAYERS = { bayer4: BAYER4 };
 
 const STORAGE_KEY = 'waltil.settings.v1';
 
@@ -102,9 +102,24 @@ let rafPending = false;
 let exportBusy = false;
 let saveTimer = 0;
 
+/* cached parsed stops to avoid re-parsing on every render */
+let stopsCache = { key: '', stops: null };
+
+/* cached quantization LUTs per levels value (2-16) */
+const quantLUTCache = new Map();
+
 /* ---------------------------------------------------------------- utils */
 
 function freshParams() { return { ...DEFAULTS, stops: DEFAULTS.stops.slice() }; }
+
+function getParsedStops(stops) {
+  const key = stops.join(',');
+  if (stopsCache.key === key && stopsCache.stops) return stopsCache.stops;
+  const parsed = stops.map(parseHex).filter(Boolean);
+  stopsCache.key = key;
+  stopsCache.stops = parsed;
+  return parsed;
+}
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 
@@ -142,6 +157,12 @@ function relLum(r, g, b) {
 }
 
 let toastTimer = 0;
+
+/**
+ * Shows a toast notification.
+ * @param {string} msg - The message to display.
+ * @param {boolean} [isError=false] - Whether the toast is an error.
+ */
 function toast(msg, isError = false) {
   const el = $('#toast');
   el.textContent = msg;
@@ -151,12 +172,24 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
+/**
+ * Sets the status bar message.
+ * @param {string} msg - The message to display.
+ */
 function setStatus(msg) { $('#status').textContent = msg; }
 
-/* ------------------------------------------------------------- accent color
-   Buttons, sliders and focus rings follow the second color of the palette,
-   so a loaded wallpaper colors the chrome around it. */
+function updateDitherStrengthState() {
+  const hidden = $('#dither').value === 'none';
+  const field = $('#dither-strength').closest('.field');
+  if (field) field.hidden = hidden;
+  $('#dither-strength').disabled = hidden;
+  $('#dither-strength-num').disabled = hidden;
+}
 
+/**
+ * Updates the accent color based on the second color stop.
+ * Also updates the favicon and logo.
+ */
 function applyAccent() {
   const stops = state.params.stops;
   if (stops.length < 2) return;
@@ -216,7 +249,7 @@ function updateLogo(dark, light) {
 function sanitizeParams(raw) {
   const p = freshParams();
   if (!raw || typeof raw !== 'object') return p;
-  const oneOf = (v, list, dflt) => (list.indexOf(v) >= 0 ? v : dflt);
+  const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
 
   for (const key of Object.keys(NUMS)) {
     const v = Number(raw[key]);
@@ -226,14 +259,14 @@ function sanitizeParams(raw) {
   p.dither = oneOf(raw.dither === 'bayer' ? 'bayer4' : raw.dither, DITHERS, DEFAULTS.dither);
 
   const q = Number(raw.previewQuality);
-  p.previewQuality = Number.isFinite(q) && PREVIEW_QUALITIES.indexOf(q) >= 0
+  p.previewQuality = Number.isFinite(q) && PREVIEW_QUALITIES.includes(q)
     ? q : DEFAULTS.previewQuality;
 
   if (Array.isArray(raw.stops)) {
     const stops = raw.stops.slice(0, 8).map(parseHex).filter(Boolean).map(toHex);
     if (stops.length >= 2) p.stops = stops;
   }
-  p.preset = typeof raw.preset === 'string' && Object.prototype.hasOwnProperty.call(PRESETS, raw.preset)
+  p.preset = (typeof raw.preset === 'string' && PRESETS.hasOwnProperty(raw.preset))
     ? raw.preset : '';
   if (p.preset && !sameStops(p.stops, PRESETS[p.preset])) p.preset = '';
   return p;
@@ -251,6 +284,11 @@ function saveSettings() {
   saveTimer = setTimeout(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.params)); } catch { /* quota / private mode */ }
   }, 250);
+}
+
+function saveSettingsNow() {
+  clearTimeout(saveTimer);
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.params)); } catch { /* quota / private mode */ }
 }
 
 /* every parameter change goes through here: recolor, re-render, persist */
@@ -286,17 +324,17 @@ function availableQualities() {
 function effectiveQuality() {
   const avail = availableQualities();
   const pref = state.params.previewQuality;
-  if (avail.indexOf(pref) >= 0) return pref;
+  if (avail.includes(pref)) return pref;
   const maxH = state.origH || 1;
   const def = maxH <= 1080 ? 0 : 1080;
-  if (avail.indexOf(def) >= 0) return def;
+  if (avail.includes(def)) return def;
   return 0;
 }
 
 function updateQualityOptions() {
   const avail = availableQualities();
   const sel = $('#preview-quality');
-  for (const opt of sel.options) opt.hidden = avail.indexOf(Number(opt.value)) < 0;
+  for (const opt of sel.options) opt.hidden = !avail.includes(Number(opt.value));
   sel.value = String(effectiveQuality());
 }
 
@@ -316,25 +354,36 @@ function updatePreviewSize() {
 }
 
 async function blobToSource(blob) {
-  if (blob && typeof blob === "object" && blob instanceof ImageBitmap) return blob;
-  if (blob && typeof blob === "object" && blob.tagName === "IMG") {
-    try { return await createImageBitmap(blob); } catch {}
-    return blob;
+  if (!blob) throw new Error('No blob provided');
+
+  if (blob instanceof ImageBitmap) return blob;
+  if (blob instanceof HTMLImageElement) {
+    try { return await createImageBitmap(blob); } catch { return blob; }
   }
+
   try {
     return await createImageBitmap(blob);
   } catch {
     const url = URL.createObjectURL(blob);
     try {
       const img = new Image();
-      img.decoding = "async";
+      img.decoding = 'async';
       await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
       return img;
-    } finally { /* keep url alive for the image's lifetime */ }
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 }
 
+/**
+ * Loads an image blob and sets it as the source.
+ * @param {Blob|File} blob - The image blob to load.
+ */
 async function loadBlob(blob) {
+  if (!blob) { toast('No image data provided', true); return; }
+  if (blob.size > 50 * 1024 * 1024) { toast('Image too large (max 50MB)', true); return; }
+
   let src;
   try {
     src = await blobToSource(blob);
@@ -342,15 +391,16 @@ async function loadBlob(blob) {
     toast('Could not read that image', true);
     return;
   }
-  const w = src.width || src.naturalWidth;
-  const h = src.height || src.naturalHeight;
+  const w = src.width ?? src.naturalWidth;
+  const h = src.height ?? src.naturalHeight;
   if (!w || !h) { toast('Not a valid image', true); return; }
+  if (w > 16384 || h > 16384) { toast('Image dimensions too large (max 16384px)', true); return; }
 
   state.source = src;
   state.srcId++;
   state.origW = w;
   state.origH = h;
-  state.fileName = (blob.name || 'pasted-wallpaper').replace(/\.[^.]+$/, '') || 'wallpaper';
+  state.fileName = (blob.name ?? 'pasted-wallpaper').replace(/\.[^.]+$/, '') || 'wallpaper';
 
   srcPixels = null;
   srcKey = '';
@@ -360,8 +410,8 @@ async function loadBlob(blob) {
   updatePreviewSize();
   preview.hidden = false;
   $('#stage-empty').hidden = true;
-  $('#meta-name').textContent = blob.name || 'clipboard image';
-  $('#meta-name').title = blob.name || 'clipboard image';
+  $('#meta-name').textContent = blob.name ?? 'clipboard image';
+  $('#meta-name').title = blob.name ?? 'clipboard image';
   $('#meta-size').textContent = `${w} × ${h}`;
   render();
   setStatus('Loaded');
@@ -414,7 +464,7 @@ const BAYER4_OFFSETS = (() => {
 
 function processPixels(data, w, h, p, scratch) {
   const n = w * h;
-  const buf = scratch && scratch.length >= n ? scratch : new Float32Array(n);
+  const buf = (scratch && scratch.length >= n) ? scratch : new Float32Array(n);
 
   /* Luminance (rec.709) */
   for (let i = 0, j = 0; i < n; i++, j += 4) {
@@ -443,12 +493,24 @@ function processPixels(data, w, h, p, scratch) {
     if (v >= 1) return 1;
     return Math.round(v * invStep) * step;
   };
+
+  /* Precompute quantization LUT for fast posterize (256 entries, 0-1 -> 0-1) */
+  let quantLUT = quantLUTCache.get(L);
+  if (!quantLUT) {
+    quantLUT = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const v = i / 255;
+      quantLUT[i] = v <= 0 ? 0 : v >= 1 ? 1 : Math.round(v * invStep) * step;
+    }
+    quantLUTCache.set(L, quantLUT);
+  }
+  const quantizeFast = (v) => quantLUT[v < 0 ? 0 : v > 1 ? 255 : Math.round(v * 255)];
   const spread = step;
 
   const dither = p.dither;
   const ditherStrength = p.ditherStrength / 100;
   if (dither === 'none') {
-    for (let i = 0; i < n; i++) buf[i] = quantize(buf[i]);
+    for (let i = 0; i < n; i++) buf[i] = quantizeFast(buf[i]);
   } else if (DIFFUSION[dither]) {
     ditherDiffuse(buf, w, h, quantize, DIFFUSION[dither], ditherStrength);
   } else if (dither === 'noise') {
@@ -458,7 +520,7 @@ function processPixels(data, w, h, p, scratch) {
   }
 
   /* Map to color stops */
-  const stops = p.stops.map(parseHex).filter(Boolean);
+  const stops = getParsedStops(p.stops);
   const k = stops.length >= 2 ? stops.length : 2;
   const stopData = new Float32Array(k * 3);
   for (let i = 0; i < k; i++) {
@@ -575,12 +637,12 @@ async function buildPreviewPixels(srcId, w, h) {
     } catch { draw = state.source; }
   }
   const stale = srcId !== state.srcId || w !== state.previewW || h !== state.previewH;
-  if (stale) { if (owned) draw.close(); return null; }
+  if (stale) { if (owned && draw.close) draw.close(); return null; }
 
   srcCanvas.width = w;
   srcCanvas.height = h;
   srcCtx.drawImage(draw, 0, 0, w, h);
-  if (owned) draw.close();
+  if (owned && draw.close) draw.close();
   return srcCtx.getImageData(0, 0, w, h);
 }
 
@@ -609,36 +671,55 @@ function scheduleRender() {
   requestAnimationFrame(() => { rafPending = false; render(); });
 }
 
+/**
+ * Renders the preview with current parameters.
+ * Uses a token system to handle race conditions from rapid parameter changes.
+ */
 async function render() {
   if (!state.source) return;
   const token = ++renderToken;
+  const currentSource = state.source;
   const t0 = performance.now();
-  const src = await ensurePreviewPixels();
-  if (!src || token !== renderToken) return;
-  ensureWork();
+  try {
+    const src = await ensurePreviewPixels();
+    if (!src || token !== renderToken || state.source !== currentSource) return;
+    ensureWork();
 
-  if (state.compare) {
-    pctx.putImageData(src, 0, 0);
-    setStatus('Original');
-    return;
+    if (state.compare) {
+      pctx.putImageData(src, 0, 0);
+      setStatus('Original');
+      return;
+    }
+
+    work.data.set(src.data);
+    processPixels(work.data, state.previewW, state.previewH, state.params, previewBuf(state.previewW * state.previewH));
+    pctx.putImageData(work, 0, 0);
+    setStatus(`${state.previewW} × ${state.previewH} · ${(performance.now() - t0).toFixed(1)} ms`);
+  } catch (err) {
+    console.error('Render error:', err);
+    setStatus('Render error');
   }
-
-  work.data.set(src.data);
-  processPixels(work.data, state.previewW, state.previewH, state.params, previewBuf(state.previewW * state.previewH));
-  pctx.putImageData(work, 0, 0);
-  setStatus(`${state.previewW} × ${state.previewH} · ${(performance.now() - t0).toFixed(1)} ms`);
 }
 
+/**
+ * Renders the image at full resolution for export.
+ * @returns {Promise<HTMLCanvasElement>} The rendered canvas.
+ */
 async function renderFull() {
   const c = document.createElement('canvas');
   c.width = state.origW;
   c.height = state.origH;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(state.source, 0, 0, state.origW, state.origH);
-  const img = ctx.getImageData(0, 0, state.origW, state.origH);
-  processPixels(img.data, state.origW, state.origH, state.params, fullBuf(state.origW * state.origH, state.origW, state.origH));
-  ctx.putImageData(img, 0, 0);
-  return c;
+  try {
+    ctx.drawImage(state.source, 0, 0, state.origW, state.origH);
+    const img = ctx.getImageData(0, 0, state.origW, state.origH);
+    processPixels(img.data, state.origW, state.origH, state.params, fullBuf(state.origW * state.origH, state.origW, state.origH));
+    ctx.putImageData(img, 0, 0);
+    return c;
+  } catch (e) {
+    c.width = 1; c.height = 1; // Allow GC
+    throw e;
+  }
 }
 
 /* ---------------------------------------------------------------- export */
@@ -980,7 +1061,7 @@ function syncControls() {
   setPairValue('black', p.black);
   setPairValue('white', p.white);
   setPairValue('levels', p.levels);
-  setPairValue('ditherStrength', p.ditherStrength);
+  setPairValue('dither-strength', p.ditherStrength);
   $('#invert').checked = p.invert;
   $('#dither').value = p.dither;
   updateDitherStrengthState();
@@ -1052,7 +1133,14 @@ function applyDefaults() {
   state.params = freshParams();
   syncControls();
   if (state.source) updatePreviewSize();
-  touch();
+  applyAccent();
+  saveSettingsNow();
+  if (state.source) {
+    render().catch((err) => {
+      console.error('Render failed after reset:', err);
+      toast('Failed to reset preview', true);
+    });
+  }
 }
 
 const SECTION_RESETS = {
@@ -1069,6 +1157,9 @@ const SECTION_RESETS = {
 };
 
 function clearSource() {
+  if (state.source && state.source.close) {
+    state.source.close();
+  }
   state.source = null;
   state.srcId++;
   state.origW = 0;
@@ -1114,14 +1205,27 @@ function bindUI() {
 
   $('#btn-paste').addEventListener('click', async () => {
     try {
+      if (!navigator.clipboard?.read) {
+        toast('Clipboard API not available — press Ctrl+V to paste');
+        return;
+      }
       const items = await navigator.clipboard.read();
       for (const item of items) {
         const type = item.types.find((t) => t.startsWith('image/'));
-        if (type) { await loadBlob(await item.getType(type)); return; }
+        if (type) {
+          const blob = await item.getType(type);
+          await loadBlob(blob);
+          return;
+        }
       }
       toast('No image found in the clipboard');
-    } catch {
-      toast('Press Ctrl+V to paste an image');
+    } catch (err) {
+      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+        toast('Clipboard access denied — press Ctrl+V to paste');
+      } else {
+        console.error('Paste error:', err);
+        toast('Failed to paste from clipboard');
+      }
     }
   });
 
@@ -1138,24 +1242,17 @@ function bindUI() {
   bindPair('levels', 'levels');
   bindPair('dither-strength', 'ditherStrength');
 
-  function updateDitherStrengthState() {
-    const hidden = $('#dither').value === 'none';
-    const field = $('#dither-strength').closest('.field');
-    if (field) field.hidden = hidden;
-    $('#dither-strength').disabled = hidden;
-    $('#dither-strength-num').disabled = hidden;
-  }
+  updateDitherStrengthState();
   $('#dither').addEventListener('change', (e) => {
     state.params.dither = e.target.value;
     updateDitherStrengthState();
     touch();
   });
-  updateDitherStrengthState();
   $('#invert').addEventListener('change', (e) => { state.params.invert = e.target.checked; touch(); });
 
   $('#preview-quality').addEventListener('change', (e) => {
     const v = Number(e.target.value);
-    if (PREVIEW_QUALITIES.indexOf(v) < 0) return;
+    if (!PREVIEW_QUALITIES.includes(v)) return;
     state.params.previewQuality = v;
     if (state.source) updatePreviewSize();
     touch();
@@ -1267,42 +1364,33 @@ function bindUI() {
     });
 
     // Initialize trigger swatches from loaded settings (state.params already loaded)
+    function setupTrigger(option, colors) {
+      triggerText.textContent = option ? option.textContent.trim() : 'Custom';
+      triggerSwatches.innerHTML = '';
+      if (colors) {
+        colors.split(',').forEach(c => {
+          const s = document.createElement('span');
+          s.style.background = c.trim();
+          triggerSwatches.appendChild(s);
+        });
+      }
+      options.forEach(o => o.setAttribute('aria-selected', 'false'));
+      if (option) option.setAttribute('aria-selected', 'true');
+    }
+
     const presetVal = state.params.preset;
     let initialOpt = null;
     if (presetVal) {
       initialOpt = optionsList.querySelector(`[data-value="${presetVal}"]`);
     } else {
-      // Custom preset has data-value="" in HTML
       initialOpt = optionsList.querySelector('[data-value=""]');
     }
     if (!initialOpt) {
-      // Fallback - Custom preset
-      triggerText.textContent = 'Custom';
-      triggerSwatches.innerHTML = '';
-      state.params.stops.forEach(c => {
-        const s = document.createElement('span');
-        s.style.background = c.trim();
-        triggerSwatches.appendChild(s);
-      });
-      options.forEach(o => o.setAttribute('aria-selected', 'false'));
+      setupTrigger(null, state.params.stops.join(','));
     } else if (initialOpt.dataset.colors) {
-      initialOpt.dataset.colors.split(',').forEach(c => {
-        const s = document.createElement('span');
-        s.style.background = c.trim();
-        triggerSwatches.appendChild(s);
-      });
-      triggerText.textContent = initialOpt.textContent.trim();
-      initialOpt.setAttribute('aria-selected', 'true');
+      setupTrigger(initialOpt, initialOpt.dataset.colors);
     } else {
-      // Custom preset selected
-      triggerText.textContent = 'Custom';
-      triggerSwatches.innerHTML = '';
-      state.params.stops.forEach(c => {
-        const s = document.createElement('span');
-        s.style.background = c.trim();
-        triggerSwatches.appendChild(s);
-      });
-      initialOpt.setAttribute('aria-selected', 'true');
+      setupTrigger(initialOpt, state.params.stops.join(','));
     }
     renderStops();
   })();
@@ -1378,7 +1466,7 @@ function bindUI() {
   /* paste anywhere */
   window.addEventListener('paste', (e) => {
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
@@ -1391,18 +1479,28 @@ function bindUI() {
   });
 
   /* drag & drop */
-  let dragDepth = 0;
   const stage = $('#stage');
   const showDrag = (on) => {
     stage.classList.toggle('dragover', on);
     document.body.classList.toggle('dragging', on);
   };
-  window.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; showDrag(true); });
-  window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; showDrag(false); } });
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    showDrag(true);
+  });
+  window.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (e.clientX === 0 && e.clientY === 0) return; // Ignore synthetic events
+    const rect = stage.getBoundingClientRect();
+    if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+      showDrag(false);
+    }
+  });
   window.addEventListener('drop', (e) => {
     e.preventDefault();
-    dragDepth = 0;
     showDrag(false);
     const file = [...(e.dataTransfer?.files || [])].find((f) => f.type.startsWith('image/'));
     if (file) openFile(file);
